@@ -38,6 +38,7 @@
 [Packages]
   MdePkg/MdePkg.dec
   MdeModulePkg/MdeModulePkg.dec
+  ShellPkg/ShellPkg.dec
 
 [Guids]
   gEfiCapsuleReportGuid                  ## CONSUMES   ## GUID
@@ -61,6 +62,7 @@
   UefiLib
   PrintLib
   BmpSupportLib
+  ShellLib
 
 [UserExtensions.TianoCore."ExtraFiles"]
   CapsuleAppExtra.uni

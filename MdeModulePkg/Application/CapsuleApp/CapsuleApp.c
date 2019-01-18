@@ -27,6 +27,7 @@
 #include <Guid/SystemResourceTable.h>
 #include <Guid/FmpCapsule.h>
 #include <IndustryStandard/WindowsUxCapsule.h>
+#include <Library/ShellLib.h>
 
 #define CAPSULE_HEADER_SIZE  0x20
 
@@ -48,6 +49,23 @@ extern CHAR16 **Argv;
 UINTN  NumberOfDescriptors = 1;
 UINTN  CapsuleFirstIndex;
 UINTN  CapsuleLastIndex;
+
+STATIC CONST SHELL_PARAM_ITEM ParamList[] = {
+  {L"-C", TypeFlag},
+  {L"-E", TypeFlag},
+  {L"-S", TypeFlag},
+
+  {L"-NR", TypeFlag},
+
+  {L"-G", TypeValue},
+  {L"-O", TypeValue},
+  {L"-N", TypeValue},
+  {L"-D", TypeValue},
+  {L"-P", TypeValue},
+  {L"-I", TypeValue},
+
+  {NULL, TypeMax}
+  };
 
 /**
   Dump capsule information
@@ -161,13 +179,12 @@ GetArg (
 **/
 EFI_STATUS
 CreateBmpFmp (
-  VOID
+  IN CHAR16                                     *BmpName,
+  IN CHAR16                                     *OutputCapsuleName
   )
 {
-  CHAR16                                        *OutputCapsuleName;
   VOID                                          *BmpBuffer;
   UINTN                                         FileSize;
-  CHAR16                                        *BmpName;
   UINT8                                         *FullCapsuleBuffer;
   UINTN                                         FullCapsuleBufferSize;
   EFI_DISPLAY_CAPSULE                           *DisplayCapsule;
@@ -191,22 +208,10 @@ CreateBmpFmp (
   // HorizontalResolution >= BMP_IMAGE_HEADER.PixelWidth
   // VerticalResolution   >= BMP_IMAGE_HEADER.PixelHeight
 
-  if (Argc != 5) {
-    Print(L"CapsuleApp: Incorrect parameter count.\n");
-    return EFI_UNSUPPORTED;
-  }
-
-  if (StrCmp(Argv[3], L"-O") != 0) {
-    Print(L"CapsuleApp: NO output capsule name.\n");
-    return EFI_UNSUPPORTED;
-  }
-  OutputCapsuleName = Argv[4];
-
   BmpBuffer = NULL;
   FileSize = 0;
   FullCapsuleBuffer = NULL;
 
-  BmpName = Argv[2];
   Status = ReadFileToBuffer(BmpName, &FileSize, &BmpBuffer);
   if (EFI_ERROR(Status)) {
     Print(L"CapsuleApp: BMP image (%s) is not found.\n", BmpName);
@@ -425,13 +430,12 @@ IsFmpCapsuleGuid (
 **/
 EFI_STATUS
 CreateNestedFmp (
-  VOID
+  IN CHAR16                                     *CapsuleName,
+  IN CHAR16                                     *OutputCapsuleName
   )
 {
-  CHAR16                                        *OutputCapsuleName;
   VOID                                          *CapsuleBuffer;
   UINTN                                         FileSize;
-  CHAR16                                        *CapsuleName;
   UINT8                                         *FullCapsuleBuffer;
   UINTN                                         FullCapsuleBufferSize;
   EFI_CAPSULE_HEADER                            *NestedCapsuleHeader;
@@ -439,22 +443,10 @@ CreateNestedFmp (
   UINT32                                        FwType;
   EFI_STATUS                                    Status;
 
-  if (Argc != 5) {
-    Print(L"CapsuleApp: Incorrect parameter count.\n");
-    return EFI_UNSUPPORTED;
-  }
-
-  if (StrCmp(Argv[3], L"-O") != 0) {
-    Print(L"CapsuleApp: NO output capsule name.\n");
-    return EFI_UNSUPPORTED;
-  }
-  OutputCapsuleName = Argv[4];
-
   CapsuleBuffer = NULL;
   FileSize = 0;
   FullCapsuleBuffer = NULL;
 
-  CapsuleName = Argv[2];
   Status = ReadFileToBuffer(CapsuleName, &FileSize, &CapsuleBuffer);
   if (EFI_ERROR(Status)) {
     Print(L"CapsuleApp: Capsule image (%s) is not found.\n", CapsuleName);
@@ -851,206 +843,257 @@ UefiMain (
 {
   EFI_STATUS                    Status;
   RETURN_STATUS                 RStatus;
-  UINTN                         FileSize[MAX_CAPSULE_NUM];
   VOID                          *CapsuleBuffer[MAX_CAPSULE_NUM];
-  EFI_CAPSULE_BLOCK_DESCRIPTOR  *BlockDescriptors;
   EFI_CAPSULE_HEADER            *CapsuleHeaderArray[MAX_CAPSULE_NUM + 1];
-  UINT64                        MaxCapsuleSize;
+  EFI_CAPSULE_BLOCK_DESCRIPTOR  *BlockDescriptors;
   EFI_RESET_TYPE                ResetType;
+  UINT64                        MaxCapsuleSize;
+  LIST_ENTRY                    *Package;
+  CHAR16                        *ProblemParam;
+  CHAR16                        *BmpFileName;
+  CHAR16                        *CapsuleFileName;
+  CHAR16                        *OutputFileName;
+  CHAR16                        *GuidStr;
+  CHAR16                        *IndexStr;
+  EFI_GUID                      ImageTypeGuid;  
+  BOOLEAN                       NoResetFlag;
   BOOLEAN                       NeedReset;
-  BOOLEAN                       NoReset;
-  CHAR16                        *CapsuleName;
+  UINTN                         FileSize[MAX_CAPSULE_NUM];
   UINTN                         CapsuleNum;
-  UINTN                         Index;
-  EFI_GUID                      ImageTypeId;
   UINTN                         ImageIndex;
+  UINTN                         FlagCount;
+  UINTN                         Index;
 
-  Status = GetArg();
-  if (EFI_ERROR(Status)) {
-    Print(L"Please use UEFI SHELL to run this application!\n", Status);
-    return Status;
+  Status      = EFI_SUCCESS;
+  NoResetFlag = FALSE;
+  FlagCount   = 0;
+  
+  Status = ShellCommandLineParse (ParamList, &Package, &ProblemParam, TRUE);
+  if (EFI_ERROR (Status)) {
+    PrintUsage ();
+    Status = EFI_UNSUPPORTED;
+    goto Done;
   }
-  if (Argc < 2) {
-    PrintUsage();
-    return EFI_UNSUPPORTED;
-  }
-  if (StrCmp(Argv[1], L"-D") == 0) {
-    if (Argc != 3) {
-      Print(L"CapsuleApp: Incorrect parameter count.\n");
-      return EFI_UNSUPPORTED;
-    }
-    Status = DumpCapsule(Argv[2]);
-    return Status;
-  }
-  if (StrCmp(Argv[1], L"-G") == 0) {
-    Status = CreateBmpFmp();
-    return Status;
-  }
-  if (StrCmp(Argv[1], L"-N") == 0) {
-    Status = CreateNestedFmp();
-    return Status;
-  }
-  if (StrCmp(Argv[1], L"-S") == 0) {
-    Status = DumpCapsuleStatusVariable();
-    return EFI_SUCCESS;
-  }
-  if (StrCmp(Argv[1], L"-C") == 0) {
-    Status = ClearCapsuleStatusVariable();
-    return Status;
-  }
-  if (StrCmp(Argv[1], L"-P") == 0) {
-    if (Argc == 2) {
-      DumpFmpData();
-    }
-    if (Argc >= 3) {
-      if (StrCmp(Argv[2], L"GET") != 0) {
-        Print(L"CapsuleApp: Unrecognized option(%s).\n", Argv[2]);
-        return EFI_UNSUPPORTED;
-      } else {
-        if (Argc != 7) {
-          Print(L"CapsuleApp: Incorrect parameter count.\n");
-          return EFI_UNSUPPORTED;
-        }
 
-        //
-        // FMP->GetImage()
-        //
-        RStatus = StrToGuid (Argv[3], &ImageTypeId);
-        if (RETURN_ERROR (RStatus) || (Argv[3][GUID_STRING_LENGTH] != L'\0')) {
-          Print (L"Invalid ImageTypeId - %s\n", Argv[3]);
-          return EFI_INVALID_PARAMETER;
+  for (Index = 0; ParamList[Index].Type != TypeMax; Index++) {
+    if (ShellCommandLineGetFlag (Package, ParamList[Index].Name)) {
+      FlagCount++;
+    }
+  }
+
+  CapsuleNum = ShellCommandLineGetCount (Package) - 1;
+  
+  if (CapsuleNum == 0) {
+    if (FlagCount == 1) {
+      //
+      //  CapsuleApp -C
+      //
+      if (ShellCommandLineGetFlag (Package, L"-C")) {
+        Status = ClearCapsuleStatusVariable();
+      }
+
+      //
+      //  CapsuleApp -D <CapsuleFile>
+      //
+      if (ShellCommandLineGetFlag (Package, L"-D")) {
+        CapsuleFileName = (CHAR16 *)ShellCommandLineGetValue (Package, L"-D");
+        if (CapsuleFileName != NULL) {
+          Status = DumpCapsule (CapsuleFileName);
+        } else {
+          Print (L"CapsuleApp: Incorrect Parameter Count.\n");
+          Status = EFI_UNSUPPORTED;
         }
-        ImageIndex = StrDecimalToUintn(Argv[4]);
-        if (StrCmp(Argv[5], L"-O") != 0) {
-          Print(L"CapsuleApp: NO output file name.\n");
-          return EFI_UNSUPPORTED;
-        }
-        DumpFmpImage(&ImageTypeId, ImageIndex, Argv[6]);
+      }
+
+      //
+      //  CapsuleApp -E
+      //
+      if (ShellCommandLineGetFlag (Package, L"-E")) {
+        DumpEsrtData ();
+      }
+
+      //
+      //  CapsuleApp -P
+      //
+      if (ShellCommandLineGetFlag (Package, L"-P")) {
+        DumpFmpData ();
+      }
+
+      //
+      //  CapsuleApp -S
+      //
+      if (ShellCommandLineGetFlag (Package, L"-S")) {
+        Status = DumpCapsuleStatusVariable ();
       }
     }
-    return EFI_SUCCESS;
-  }
 
-  if (StrCmp(Argv[1], L"-E") == 0) {
-    DumpEsrtData();
-    return EFI_SUCCESS;
-  }
+    if (FlagCount == 2) {
+      //
+      //  CapsuleApp -G <BMP> -O <OutputFileName>
+      //
+      if (ShellCommandLineGetFlag (Package, L"-G") && ShellCommandLineGetFlag (Package, L"-O")) {
+        BmpFileName     = (CHAR16 *)ShellCommandLineGetValue (Package, L"-G");
+        OutputFileName  = (CHAR16 *)ShellCommandLineGetValue (Package, L"-O");
+        if (BmpFileName != NULL && OutputFileName != NULL) {
+          Status = CreateBmpFmp (BmpFileName, OutputFileName);
+        } else {
+          Print (L"CapsuleApp: Incorrect Parameter Count.\n");
+          Status = EFI_UNSUPPORTED;
+        }
+      }
 
-  if (Argv[1][0] == L'-') {
-    Print(L"CapsuleApp: Unrecognized option(%s).\n", Argv[1]);
-    return EFI_UNSUPPORTED;
-  }
+      //
+      //  CapsuleApp -N <CapsuleFile> -O <OutputFileName>
+      //
+      if (ShellCommandLineGetFlag (Package, L"-N") && ShellCommandLineGetFlag (Package ,L"-O")) {
+        CapsuleFileName = (CHAR16 *)ShellCommandLineGetValue (Package, L"-N");
+        OutputFileName  = (CHAR16 *)ShellCommandLineGetValue (Package, L"-O");
+        if (CapsuleFileName != NULL && OutputFileName != NULL) {
+          Status = CreateNestedFmp (CapsuleFileName, OutputFileName);
+        } else {
+          Print (L"CapsuleApp: Incorrect Parameter Count.\n");
+          Status = EFI_UNSUPPORTED;
+        }
+      }
+    }
 
-  CapsuleFirstIndex = 1;
-  NoReset = FALSE;
-  if ((Argc > 1) && (StrCmp(Argv[Argc - 1], L"-NR") == 0)) {
-    NoReset = TRUE;
-    CapsuleLastIndex = Argc - 2;
+    if (FlagCount == 3) {
+      //
+      //  CapsuleApp -P <ImageTypeGuid> -I <ImageIndex> -O <OutputFile>
+      //
+      if ( ShellCommandLineGetFlag (Package, L"-P") &&
+           ShellCommandLineGetFlag (Package, L"-I") &&
+           ShellCommandLineGetFlag (Package, L"-O")
+         ) {
+        GuidStr         = (CHAR16 *)ShellCommandLineGetValue (Package, L"-P");
+        IndexStr        = (CHAR16 *)ShellCommandLineGetValue (Package, L"-I");
+        OutputFileName  = (CHAR16 *)ShellCommandLineGetValue (Package, L"-O");
+        if (GuidStr != NULL && IndexStr != NULL && OutputFileName != NULL) {
+          RStatus = StrToGuid (GuidStr, &ImageTypeGuid);
+          if (EFI_ERROR (RStatus) || GuidStr[GUID_STRING_LENGTH] != L'\0') {
+            Print (L"Invalid ImageTypeId - %s\n", GuidStr);
+            Status = EFI_INVALID_PARAMETER;
+            goto Done;
+          }
+          ImageIndex = StrDecimalToUintn (IndexStr);
+          DumpFmpImage (&ImageTypeGuid, ImageIndex, OutputFileName);
+        } else {
+          Print (L"CapsuleApp: Incorrect Parameter Count.\n");
+          Status = EFI_UNSUPPORTED;
+        }
+      }   
+    }
   } else {
-    CapsuleLastIndex = Argc - 1;
-  }
-  CapsuleNum = CapsuleLastIndex - CapsuleFirstIndex + 1;
-
-  if (CapsuleFirstIndex > CapsuleLastIndex) {
-    Print(L"CapsuleApp: NO capsule image.\n");
-    return EFI_UNSUPPORTED;
-  }
-  if (CapsuleNum > MAX_CAPSULE_NUM) {
-    Print(L"CapsuleApp: Too many capsule images.\n");
-    return EFI_UNSUPPORTED;
-  }
-
-  ZeroMem(&CapsuleBuffer, sizeof(CapsuleBuffer));
-  ZeroMem(&FileSize, sizeof(FileSize));
-  BlockDescriptors = NULL;
-
-  for (Index = 0; Index < CapsuleNum; Index++) {
-    CapsuleName = Argv[CapsuleFirstIndex + Index];
-    Status = ReadFileToBuffer(CapsuleName, &FileSize[Index], &CapsuleBuffer[Index]);
-    if (EFI_ERROR(Status)) {
-      Print(L"CapsuleApp: capsule image (%s) is not found.\n", CapsuleName);
-      goto Done;
-    }
-    if (!IsValidCapsuleHeader (CapsuleBuffer[Index], FileSize[Index])) {
-      Print(L"CapsuleApp: Capsule image (%s) is not a valid capsule.\n", CapsuleName);
-      return EFI_INVALID_PARAMETER;
-    }
-  }
-
-  //
-  // Every capsule use 2 descriptor 1 for data 1 for end
-  //
-  Status = BuildGatherList(CapsuleBuffer, FileSize, CapsuleNum, &BlockDescriptors);
-  if (EFI_ERROR(Status)) {
-    goto Done;
-  }
-
-  //
-  // Call the runtime service capsule.
-  //
-  NeedReset = FALSE;
-  for (Index = 0; Index < CapsuleNum; Index++) {
-    CapsuleHeaderArray[Index] = (EFI_CAPSULE_HEADER *) CapsuleBuffer[Index];
-    if ((CapsuleHeaderArray[Index]->Flags & CAPSULE_FLAGS_PERSIST_ACROSS_RESET) != 0) {
-      NeedReset = TRUE;
-    }
-  }
-  CapsuleHeaderArray[CapsuleNum] = NULL;
-
-  //
-  // Inquire platform capability of UpdateCapsule.
-  //
-  Status = gRT->QueryCapsuleCapabilities (CapsuleHeaderArray, CapsuleNum, &MaxCapsuleSize, &ResetType);
-  if (EFI_ERROR(Status)) {
-    Print (L"CapsuleApp: failed to query capsule capability - %r\n", Status);
-    goto Done;
-  }
-
-  for (Index = 0; Index < CapsuleNum; Index++) {
-    if (FileSize[Index] > MaxCapsuleSize) {
-      Print (L"CapsuleApp: capsule is too large to update, %ld is allowed\n", MaxCapsuleSize);
+    if (CapsuleNum > MAX_CAPSULE_NUM) {
+      Print(L"CapsuleApp: Too many capsule images.\n");
       Status = EFI_UNSUPPORTED;
       goto Done;
     }
-  }
+    
+    if (FlagCount == 1) {
+      if (ShellCommandLineGetFlag (Package, L"-NR")) {
+        NoResetFlag = TRUE;
+      }
+    }
 
-  //
-  // Check whether the input capsule image has the flag of persist across system reset.
-  //
-  if (NeedReset) {
-    Status = gRT->UpdateCapsule(CapsuleHeaderArray,CapsuleNum,(UINTN) BlockDescriptors);
-    if (Status != EFI_SUCCESS) {
-      Print (L"CapsuleApp: failed to update capsule - %r\n", Status);
+    ZeroMem (&CapsuleBuffer, sizeof (CapsuleBuffer));
+    ZeroMem (&FileSize, sizeof (FileSize));
+
+    for (Index = 0; Index < CapsuleNum; Index++) {
+      CapsuleFileName = (CHAR16 *)ShellCommandLineGetRawValue (Package, Index + 1);
+      Status = ReadFileToBuffer (CapsuleFileName, &FileSize[Index], &CapsuleBuffer[Index]);
+      if (EFI_ERROR (Status)) {
+        Print(L"CapsuleApp: capsule image (%s) is not found.\n", CapsuleFileName);
+        goto Done;
+      }
+      if (!IsValidCapsuleHeader (CapsuleBuffer[Index], FileSize[Index])) {
+        Print(L"CapsuleApp: Capsule image (%s) is not a valid capsule.\n", CapsuleFileName);
+        Status = EFI_INVALID_PARAMETER;
+        goto Done;
+      }
+    }
+
+    //
+    // Every capsule use 2 descriptor 1 for data 1 for end
+    //
+    BlockDescriptors = NULL;
+    Status = BuildGatherList (CapsuleBuffer, FileSize, CapsuleNum, &BlockDescriptors);
+    if (EFI_ERROR (Status)) {
+      Print (L"Build Gather List Fail, %r\n", Status);
       goto Done;
     }
+
     //
-    // For capsule with CAPSULE_FLAGS_PERSIST_ACROSS_RESET + CAPSULE_FLAGS_INITIATE_RESET,
-    // a system reset should have been triggered by gRT->UpdateCapsule() calling above.
+    // Call the runtime service capsule.
     //
-    // For capsule with CAPSULE_FLAGS_PERSIST_ACROSS_RESET and without CAPSULE_FLAGS_INITIATE_RESET,
-    // check if -NR (no-reset) has been specified or not.
-    //
-    if (!NoReset) {
-      //
-      // For capsule who has reset flag and no -NR (no-reset) has been specified, after calling UpdateCapsule service,
-      // trigger a system reset to process capsule persist across a system reset.
-      //
-      gRT->ResetSystem (ResetType, EFI_SUCCESS, 0, NULL);
+    NeedReset = FALSE;
+    for (Index = 0; Index < CapsuleNum; Index++) {
+      CapsuleHeaderArray[Index] = (EFI_CAPSULE_HEADER *) CapsuleBuffer[Index];
+      if ((CapsuleHeaderArray[Index]->Flags & CAPSULE_FLAGS_PERSIST_ACROSS_RESET) != 0) {
+        NeedReset = TRUE;
+      }
     }
-  } else {
+    CapsuleHeaderArray[CapsuleNum] = NULL;
+
     //
-    // For capsule who has no reset flag, only call UpdateCapsule Service without a
-    // system reset. The service will process the capsule immediately.
+    // Inquire platform capability of UpdateCapsule.
     //
-    Status = gRT->UpdateCapsule (CapsuleHeaderArray,CapsuleNum,(UINTN) BlockDescriptors);
-    if (Status != EFI_SUCCESS) {
-      Print (L"CapsuleApp: failed to update capsule - %r\n", Status);
+    Status = gRT->QueryCapsuleCapabilities (CapsuleHeaderArray, CapsuleNum, &MaxCapsuleSize, &ResetType);
+    if (EFI_ERROR (Status)) {
+      Print (L"CapsuleApp: failed to query capsule capability - %r\n", Status);
+      goto Done;
     }
+
+    for (Index = 0; Index < CapsuleNum; Index++) {
+      if (FileSize[Index] > MaxCapsuleSize) {
+        Print (L"CapsuleApp: capsule is too large to update, %ld is allowed\n", MaxCapsuleSize);
+        Status = EFI_UNSUPPORTED;
+        goto Done;
+      }
+    }
+
+    //
+    // Check whether the input capsule image has the flag of persist across system reset.
+    //
+    if (NeedReset) {
+      Status = gRT->UpdateCapsule (CapsuleHeaderArray,CapsuleNum,(UINTN) BlockDescriptors);
+      if (Status != EFI_SUCCESS) {
+        Print (L"CapsuleApp: failed to update capsule - %r\n", Status);
+        goto Done;
+      }
+      //
+      // For capsule with CAPSULE_FLAGS_PERSIST_ACROSS_RESET + CAPSULE_FLAGS_INITIATE_RESET,
+      // a system reset should have been triggered by gRT->UpdateCapsule() calling above.
+      //
+      // For capsule with CAPSULE_FLAGS_PERSIST_ACROSS_RESET and without CAPSULE_FLAGS_INITIATE_RESET,
+      // check if -NR (no-reset) has been specified or not.
+      //
+      if (!NoResetFlag) {
+        //
+        // For capsule who has reset flag and no -NR (no-reset) has been specified, after calling UpdateCapsule service,
+        // trigger a system reset to process capsule persist across a system reset.
+        //
+        gRT->ResetSystem (ResetType, EFI_SUCCESS, 0, NULL);
+      }
+    } else {
+      //
+      // For capsule who has no reset flag, only call UpdateCapsule Service without a
+      // system reset. The service will process the capsule immediately.
+      //
+      Status = gRT->UpdateCapsule (CapsuleHeaderArray,CapsuleNum,(UINTN) BlockDescriptors);
+      if (Status != EFI_SUCCESS) {
+        Print (L"CapsuleApp: failed to update capsule - %r\n", Status);
+      }
+    }
+
+    Status = EFI_SUCCESS;
   }
 
-  Status = EFI_SUCCESS;
-
 Done:
+  if (Package != NULL) {
+    ShellCommandLineFreeVarList (Package);
+  }
+
   for (Index = 0; Index < CapsuleNum; Index++) {
     if (CapsuleBuffer[Index] != NULL) {
       FreePool (CapsuleBuffer[Index]);
